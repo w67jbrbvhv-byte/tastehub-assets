@@ -6,7 +6,8 @@ Market analysis and go-to-market plan for a private-label range of Indian powder
 
 | File | What it is |
 |---|---|
-| **`supplier-rfq.md`** | **Send this first.** RFQ and due-diligence pack for MpLinn Foods, including the blocking organic-certification questions. |
+| **`email-01-mplinn-enquiry.md`** | **Send this first.** Ready-to-send first-contact email to MpLinn Foods, focused on the green banana range, with the blocking organic questions up front. |
+| `supplier-rfq.md` | The full RFQ and due-diligence pack behind that email, plus a response tracker to log answers against. |
 | `strategy.md` | Full market read, positioning, channel plan, import and risk analysis, with sources. |
 | `landed-cost-model.xlsx` | Live cost and margin model. Yellow cells are inputs; a VAT toggle drives the whole sheet. |
 | `compliance-checklist.md` | Sequenced, owner-assigned UK compliance actions from registration through label sign-off. |
