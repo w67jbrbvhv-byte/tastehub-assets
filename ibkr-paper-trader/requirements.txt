@@ -1,0 +1,5 @@
+# Pinned loosely: these are the majors this code was written against.
+ib_async>=2.1.0,<3
+anthropic>=1.5.0,<2
+pydantic>=2.9,<3
+PyYAML>=6.0,<7

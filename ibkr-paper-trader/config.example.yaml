@@ -1,0 +1,100 @@
+# ---------------------------------------------------------------------------
+# Copy this to config.yaml and edit. config.yaml is git-ignored.
+# ---------------------------------------------------------------------------
+
+# Only "paper" is accepted. There is no live mode in this codebase.
+mode: paper
+
+base_currency: GBP
+
+# The benchmark the agent is measured against. Must appear in `universe`.
+# Everything the agent does is judged against simply holding this instead.
+benchmark: VUAG
+
+ibkr:
+  host: 127.0.0.1
+  # 4002 = IB Gateway paper, 7497 = TWS paper.
+  # 4001 and 7496 are the LIVE ports and are rejected by this program.
+  port: 4002
+  client_id: 17
+  # Leave blank to use the first managed account the Gateway reports.
+  # Must be a DU... paper account; a U... live account aborts the run.
+  account: ""
+  # 1 = live data, 2 = frozen, 3 = delayed (15 min), 4 = delayed frozen.
+  # Use 3 unless you pay for the relevant market data subscriptions.
+  market_data_type: 3
+  connect_timeout: 20.0
+  # Trading days of daily bars to pull per instrument.
+  history_days: 400
+
+llm:
+  # The strategist runs weekly and sets the rules.
+  strategist_model: claude-opus-5
+  # The trader runs daily and may only apply those rules.
+  trader_model: claude-opus-5
+  effort: high        # low | medium | high | xhigh | max
+  max_tokens: 16000
+
+risk:
+  # Hard limits, enforced in code. The models cannot talk their way past these.
+  max_position_pct: 20.0        # max % of NAV in any one instrument
+  max_positions: 8              # max number of simultaneous holdings
+  min_cash_pct: 5.0             # cash floor, % of NAV
+  max_trade_pct: 10.0           # max % of NAV in a single order
+  max_orders_per_day: 4
+  max_daily_turnover_pct: 25.0  # total traded value per day, % of NAV
+  drawdown_halt_pct: 20.0       # halt all trading below this drawdown from peak NAV
+  min_order_value: 250.0        # skip dust orders (base currency)
+  limit_offset_bps: 25.0        # default limit price offset from last, basis points
+  max_limit_deviation_pct: 2.0  # reject a model limit price further than this from last
+  price_decimals: 2
+
+# The tradable universe. The agent may not touch anything not listed here.
+# Deliberately liquid, long-only, unlevered ETFs.
+universe:
+  - symbol: VUAG
+    exchange: SMART
+    primary_exchange: LSEETF
+    currency: GBP
+    name: Vanguard S&P 500 UCITS ETF (Acc)
+  - symbol: VWRP
+    exchange: SMART
+    primary_exchange: LSEETF
+    currency: GBP
+    name: Vanguard FTSE All-World UCITS ETF (Acc)
+  - symbol: VUKG
+    exchange: SMART
+    primary_exchange: LSEETF
+    currency: GBP
+    name: Vanguard FTSE 100 UCITS ETF (Acc)
+  - symbol: VERG
+    exchange: SMART
+    primary_exchange: LSEETF
+    currency: GBP
+    name: Vanguard FTSE Developed Europe UCITS ETF (Acc)
+  - symbol: VFEG
+    exchange: SMART
+    primary_exchange: LSEETF
+    currency: GBP
+    name: Vanguard FTSE Emerging Markets UCITS ETF (Acc)
+  - symbol: VAGS
+    exchange: SMART
+    primary_exchange: LSEETF
+    currency: GBP
+    name: Vanguard Global Aggregate Bond UCITS ETF (GBP Hedged, Acc)
+  - symbol: VGOV
+    exchange: SMART
+    primary_exchange: LSEETF
+    currency: GBP
+    name: Vanguard UK Gilt UCITS ETF
+  - symbol: SGLN
+    exchange: SMART
+    primary_exchange: LSEETF
+    currency: GBP
+    name: iShares Physical Gold ETC
+
+paths:
+  journal: data/journal.sqlite
+  strategy: strategy/STRATEGY.md
+  strategy_archive: strategy/versions
+  halt_file: HALT

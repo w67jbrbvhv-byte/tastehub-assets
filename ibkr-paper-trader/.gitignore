@@ -1,0 +1,7 @@
+data/*.sqlite
+data/*.sqlite-journal
+HALT
+__pycache__/
+*.pyc
+.venv/
+config.yaml
