@@ -169,8 +169,14 @@ class Broker:
         )
 
     # -- market data -------------------------------------------------------
-    def snapshots(self) -> dict[str, InstrumentSnapshot]:
+    def snapshots(self) -> tuple[dict[str, InstrumentSnapshot], dict[str, list[float]]]:
+        """Returns (metrics per symbol, recent closes per symbol).
+
+        The raw closes come back too so the data guard can cross-check the last
+        price against a short median before anything is decided on it.
+        """
         out: dict[str, InstrumentSnapshot] = {}
+        closes_by_symbol: dict[str, list[float]] = {}
         duration = f"{self.config.ibkr.history_days} D"
         for instrument in self.config.universe:
             contract = self.contract(instrument)
@@ -186,10 +192,11 @@ class Broker:
                 log.warning("no historical bars returned for %s", instrument.symbol)
             closes = [b.close for b in bars]
             last_date = bars[-1].date if bars else None
+            closes_by_symbol[instrument.symbol] = closes
             out[instrument.symbol] = build_snapshot(
                 instrument.symbol, instrument.name, closes, last_date
             )
-        return out
+        return out, closes_by_symbol
 
     # -- execution ---------------------------------------------------------
     def place(self, verdict: RiskVerdict, wait_seconds: float = 20.0) -> PlacedOrder:
@@ -199,15 +206,36 @@ class Broker:
         if instrument is None:
             raise RuntimeError(f"{verdict.order.symbol} left the universe mid-run")
 
-        contract = self.contract(instrument)
-        order = LimitOrder(
+        return self.place_raw(
+            symbol=verdict.order.symbol,
             action=verdict.order.action,
-            totalQuantity=verdict.order.quantity,
-            lmtPrice=verdict.limit_price,
+            quantity=verdict.order.quantity,
+            limit_price=verdict.limit_price,
+            order_ref=f"agent:{verdict.order.rule_id}",
+            wait_seconds=wait_seconds,
         )
+
+    def place_raw(
+        self,
+        symbol: str,
+        action: str,
+        quantity: int,
+        limit_price: float,
+        order_ref: str,
+        wait_seconds: float = 20.0,
+    ) -> PlacedOrder:
+        """Place an order that did not come from the strategy — currently only
+        the crash ladder. Tagged separately so it is obvious in IBKR's own
+        records which orders were mechanical and which were the model's."""
+        instrument = self.config.instrument(symbol)
+        if instrument is None:
+            raise RuntimeError(f"{symbol} is not in the universe")
+
+        contract = self.contract(instrument)
+        order = LimitOrder(action=action, totalQuantity=quantity, lmtPrice=limit_price)
         order.tif = "DAY"
         order.account = self.account
-        order.orderRef = f"agent:{verdict.order.rule_id}"
+        order.orderRef = order_ref
 
         trade = self.ib.placeOrder(contract, order)
         self.ib.sleep(1.0)
@@ -221,10 +249,10 @@ class Broker:
             waited += 1.0
 
         return PlacedOrder(
-            symbol=verdict.order.symbol,
-            action=verdict.order.action,
-            quantity=verdict.order.quantity,
-            limit_price=verdict.limit_price,
+            symbol=symbol,
+            action=action,
+            quantity=quantity,
+            limit_price=limit_price,
             ib_order_id=trade.order.orderId,
             status=trade.orderStatus.status,
             filled=trade.orderStatus.filled,
@@ -238,7 +266,7 @@ class Broker:
         for trade in self.ib.openTrades():
             if trade.order.account and trade.order.account != self.account:
                 continue
-            if not (trade.order.orderRef or "").startswith("agent:"):
+            if not (trade.order.orderRef or "").startswith(("agent:", "ladder:")):
                 continue
             self.ib.cancelOrder(trade.order)
             cancelled += 1

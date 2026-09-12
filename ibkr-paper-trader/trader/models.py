@@ -89,6 +89,8 @@ class PortfolioState:
     peak_nav: float = 0.0
     orders_today: int = 0
     turnover_today: float = 0.0
+    # Cash ring-fenced for the crash ladder. Invisible to the strategy.
+    reserve: float = 0.0
 
     @property
     def drawdown_pct(self) -> float:

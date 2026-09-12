@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from contextlib import closing
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -82,6 +83,27 @@ CREATE TABLE IF NOT EXISTS strategy_versions (
     raw_json      TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS ladder_state (
+    id                 INTEGER PRIMARY KEY CHECK (id = 1),
+    fired              TEXT NOT NULL DEFAULT '',
+    reserve_base       REAL NOT NULL DEFAULT 0,
+    carried_notional   REAL NOT NULL DEFAULT 0,
+    cycle_low_drawdown REAL NOT NULL DEFAULT 0,
+    updated_ts         TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ladder_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id        INTEGER REFERENCES runs(id),
+    ts            TEXT NOT NULL,
+    trade_date    TEXT NOT NULL,
+    drawdown_pct  REAL NOT NULL,
+    rungs         TEXT NOT NULL DEFAULT '',
+    notional      REAL NOT NULL DEFAULT 0,
+    outcome       TEXT NOT NULL,
+    note          TEXT NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_date ON orders(trade_date);
 CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(trade_date);
 """
@@ -89,6 +111,14 @@ CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(trade_date);
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+@dataclass
+class LadderStateRow:
+    fired: set[int]
+    reserve_base: float
+    carried_notional: float
+    cycle_low_drawdown: float
 
 
 class Journal:
@@ -249,6 +279,69 @@ class Journal:
                 "SELECT r.trade_date, d.assessment, d.no_trade_reason FROM decisions d "
                 "JOIN runs r ON r.id = d.run_id ORDER BY d.rowid DESC LIMIT ?",
                 (limit,),
+            ).fetchall()
+        )
+
+    # -- crash ladder ------------------------------------------------------
+    def load_ladder_state(self) -> "LadderStateRow":
+        row = self.conn.execute("SELECT * FROM ladder_state WHERE id=1").fetchone()
+        if row is None:
+            return LadderStateRow(set(), 0.0, 0.0, 0.0)
+        fired = {int(x) for x in (row["fired"] or "").split(",") if x.strip()}
+        return LadderStateRow(
+            fired,
+            float(row["reserve_base"]),
+            float(row["carried_notional"]),
+            float(row["cycle_low_drawdown"]),
+        )
+
+    def save_ladder_state(
+        self,
+        fired: set[int],
+        reserve_base: float,
+        carried_notional: float,
+        cycle_low_drawdown: float,
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO ladder_state (id, fired, reserve_base, carried_notional, "
+            "cycle_low_drawdown, updated_ts) VALUES (1,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET fired=excluded.fired, "
+            "reserve_base=excluded.reserve_base, carried_notional=excluded.carried_notional, "
+            "cycle_low_drawdown=excluded.cycle_low_drawdown, updated_ts=excluded.updated_ts",
+            (
+                ",".join(str(i) for i in sorted(fired)),
+                reserve_base,
+                carried_notional,
+                cycle_low_drawdown,
+                _now(),
+            ),
+        )
+        self.conn.commit()
+
+    def record_ladder_event(
+        self,
+        run_id: int | None,
+        drawdown_pct: float,
+        rungs: list[int],
+        notional: float,
+        outcome: str,
+        note: str = "",
+        trade_day: date | None = None,
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO ladder_events (run_id, ts, trade_date, drawdown_pct, rungs, "
+            "notional, outcome, note) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                run_id, _now(), (trade_day or date.today()).isoformat(), drawdown_pct,
+                ",".join(str(r) for r in rungs), notional, outcome, note,
+            ),
+        )
+        self.conn.commit()
+
+    def ladder_events(self, limit: int = 25) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute(
+                "SELECT * FROM ladder_events ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
         )
 

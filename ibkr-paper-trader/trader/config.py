@@ -71,6 +71,106 @@ class RiskConfig(BaseModel):
     price_decimals: int = Field(default=2, ge=0, le=6)
 
 
+class LadderTranche(BaseModel):
+    """One rung: when the benchmark is this far below its 52-week high, deploy
+    this share of the reserve."""
+
+    drawdown_pct: float = Field(gt=0, le=95, description="Benchmark drawdown that arms this rung")
+    deploy_pct: float = Field(gt=0, le=100, description="Share of the reserve to deploy, %")
+
+
+# Deeper falls buy more, because they are rarer and the expected return from
+# deploying into them is higher. Nothing here is optimised — it is a shape you
+# can defend in advance, which is the only property that matters.
+DEFAULT_TRANCHES = [
+    LadderTranche(drawdown_pct=15.0, deploy_pct=20.0),
+    LadderTranche(drawdown_pct=25.0, deploy_pct=25.0),
+    LadderTranche(drawdown_pct=35.0, deploy_pct=30.0),
+    LadderTranche(drawdown_pct=50.0, deploy_pct=25.0),
+]
+
+
+class CrashLadderConfig(BaseModel):
+    """The pre-committed response to a severe market fall.
+
+    No model is consulted. The rungs, the sizes and the instrument are decided
+    here, in advance, in the cold light of day — which is the entire point.
+    """
+
+    enabled: bool = True
+    reserve_pct: float = Field(default=25.0, ge=0, le=80)
+    target: str = Field(default="", description="What to buy on the way down. Blank = benchmark.")
+    # Rungs fire once each. They re-arm only after the benchmark recovers to
+    # within this distance of its high, so a choppy market cannot re-trigger them.
+    rearm_within_pct: float = Field(default=5.0, gt=0, le=50)
+    # A crash is exactly when normal position and turnover caps must not apply —
+    # concentrating into the broad market is the intent, not an accident.
+    max_position_pct: float = Field(default=60.0, gt=0, le=100)
+    # Spreads blow out in a fall. A 25bps limit will not fill.
+    limit_offset_bps: float = Field(default=150.0, ge=0, le=1000)
+    # An unfilled tranche carries to the next run rather than being abandoned.
+    carry_unfilled: bool = True
+    tranches: list[LadderTranche] = Field(default_factory=lambda: list(DEFAULT_TRANCHES))
+
+    @field_validator("tranches")
+    @classmethod
+    def _rungs_ascend(cls, tranches: list[LadderTranche]) -> list[LadderTranche]:
+        if not tranches:
+            return tranches
+        depths = [t.drawdown_pct for t in tranches]
+        if depths != sorted(depths):
+            raise ValueError("crash_ladder.tranches must be ordered by increasing drawdown_pct")
+        if len(set(depths)) != len(depths):
+            raise ValueError("crash_ladder.tranches contains duplicate drawdown_pct values")
+        total = sum(t.deploy_pct for t in tranches)
+        if total > 100.0 + 1e-9:
+            raise ValueError(
+                f"crash_ladder.tranches deploy {total:.1f}% of the reserve in total; "
+                f"the maximum is 100%"
+            )
+        return tranches
+
+    @property
+    def total_deploy_pct(self) -> float:
+        return sum(t.deploy_pct for t in self.tranches)
+
+
+class DataGuardConfig(BaseModel):
+    """Refusing to trade on data you do not trust.
+
+    A bad print during a fast market is indistinguishable from a real collapse
+    at the moment it arrives. The correct response to both is to stop and fetch
+    a human, not to guess.
+    """
+
+    min_bars: int = Field(default=60, ge=1, description="Below this, an instrument is unusable")
+    max_stale_days: int = Field(default=5, ge=1, description="Calendar days since the last bar")
+    max_daily_move_pct: float = Field(
+        default=25.0, gt=0, description="A one-day move beyond this marks the data suspect"
+    )
+    max_median_deviation_pct: float = Field(
+        default=35.0, gt=0, description="Deviation of the last close from the 5-day median"
+    )
+
+
+class FrictionConfig(BaseModel):
+    """What a paper fill does not charge you.
+
+    Used only in reporting, to haircut the paper record before it is compared
+    with buy-and-hold. Paper fills have no spread, no queue and no impact; a
+    record that ignores that is not evidence of anything.
+    """
+
+    commission_per_order: float = Field(default=3.0, ge=0)
+    half_spread_bps: float = Field(default=6.0, ge=0)
+    impact_bps: float = Field(default=2.0, ge=0)
+
+    def cost_of(self, notional: float) -> float:
+        return self.commission_per_order + notional * (
+            self.half_spread_bps + self.impact_bps
+        ) / 10_000.0
+
+
 class PathsConfig(BaseModel):
     journal: str = "data/journal.sqlite"
     strategy: str = "strategy/STRATEGY.md"
@@ -85,6 +185,9 @@ class Config(BaseModel):
     ibkr: IbkrConfig = Field(default_factory=IbkrConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
+    crash_ladder: CrashLadderConfig = Field(default_factory=CrashLadderConfig)
+    data_guard: DataGuardConfig = Field(default_factory=DataGuardConfig)
+    friction: FrictionConfig = Field(default_factory=FrictionConfig)
     universe: list[Instrument]
     paths: PathsConfig = Field(default_factory=PathsConfig)
 
@@ -110,6 +213,25 @@ class Config(BaseModel):
                 f"so its price history can be fetched"
             )
         return self
+
+    @model_validator(mode="after")
+    def _ladder_target_in_universe(self) -> "Config":
+        ladder = self.crash_ladder
+        if not ladder.enabled:
+            return self
+        if ladder.reserve_pct > 0 and not ladder.tranches:
+            raise ValueError(
+                "crash_ladder holds a reserve but defines no tranches: the cash would "
+                "be locked away with nothing able to deploy it"
+            )
+        target = ladder.target or self.benchmark
+        if target not in {i.symbol for i in self.universe}:
+            raise ValueError(f"crash_ladder.target {target!r} is not in the universe")
+        return self
+
+    @property
+    def ladder_target(self) -> str:
+        return self.crash_ladder.target or self.benchmark
 
     # -- resolved paths ----------------------------------------------------
     @property

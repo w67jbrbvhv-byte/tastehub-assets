@@ -49,6 +49,64 @@ risk:
   max_limit_deviation_pct: 2.0  # reject a model limit price further than this from last
   price_decimals: 2
 
+# ---------------------------------------------------------------------------
+# The crash ladder: what happens when the market falls hard.
+#
+# Decided here, in advance, in the cold light of day. No model is consulted
+# during the event — the entire value of the plan is that it was made while you
+# were calm. See PLAYBOOK.md.
+# ---------------------------------------------------------------------------
+crash_ladder:
+  enabled: true
+
+  # Cash held back from the strategy, as % of NAV. The strategy cannot see it
+  # and cannot spend it. This drags returns in every year nothing happens —
+  # that drag is the premium you pay for having ammunition when it does.
+  reserve_pct: 25.0
+
+  # What to buy on the way down. Blank = the benchmark. Broad and liquid:
+  # in a crisis, narrow ETFs gap and their spreads blow out.
+  target: VWRP
+
+  # Rungs re-arm only once the benchmark is back within this much of its high,
+  # so a choppy market cannot re-trigger a rung that already fired.
+  rearm_within_pct: 5.0
+
+  # A crash is exactly when the normal 20% position cap must not apply —
+  # concentrating into the broad market is the intent, not an accident.
+  max_position_pct: 60.0
+
+  # Spreads widen enormously in a fall. A 25bps limit simply will not fill.
+  limit_offset_bps: 150.0
+
+  # If the cash floor blocks part of a tranche, carry the remainder forward
+  # rather than abandoning it.
+  carry_unfilled: true
+
+  # Deeper falls buy more, because they are rarer and the expected return from
+  # deploying into them is higher. Measured on the BENCHMARK's drawdown from its
+  # own 252-day high — you buy because the market fell, not because you did badly.
+  tranches:
+    - {drawdown_pct: 15.0, deploy_pct: 20.0}
+    - {drawdown_pct: 25.0, deploy_pct: 25.0}
+    - {drawdown_pct: 35.0, deploy_pct: 30.0}
+    - {drawdown_pct: 50.0, deploy_pct: 25.0}
+
+# Refusing to act on data you do not trust. A bad print and a real collapse look
+# identical when they arrive; both stop the run, ladder included.
+data_guard:
+  min_bars: 60
+  max_stale_days: 5
+  max_daily_move_pct: 25.0
+  max_median_deviation_pct: 35.0
+
+# What a paper fill does not charge you. Used in reporting only, to haircut the
+# paper record before comparing it with buy-and-hold.
+friction:
+  commission_per_order: 3.0
+  half_spread_bps: 6.0
+  impact_bps: 2.0
+
 # The tradable universe. The agent may not touch anything not listed here.
 # Deliberately liquid, long-only, unlevered ETFs.
 universe:

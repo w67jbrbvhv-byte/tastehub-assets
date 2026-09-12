@@ -53,8 +53,14 @@ def evaluate(
     prices: dict[str, float],
     config: Config,
     known_rule_ids: set[str],
+    reserve: float = 0.0,
 ) -> tuple[list[RiskVerdict], str]:
     """Screen a batch of proposed orders.
+
+    `reserve` is cash ring-fenced for the crash ladder. The strategy cannot see
+    it and cannot spend it: it is subtracted from spendable cash before any buy
+    is considered. That is what stops a model from putting the whole account to
+    work in a rally and leaving nothing for the fall.
 
     Returns (verdicts in execution order, halt_reason). If halt_reason is
     non-empty every order is rejected and nothing should be placed.
@@ -65,6 +71,7 @@ def evaluate(
 
     risk = config.risk
     sim = deepcopy(state)
+    sim.reserve = max(0.0, reserve)
     verdicts: list[RiskVerdict] = []
 
     # Sells first: they free cash and position slots that buys may need.
@@ -169,6 +176,11 @@ def _evaluate_one(
         return reject(
             f"would leave cash {cash_after:,.2f} below the floor {cash_floor:,.2f} "
             f"({risk.min_cash_pct:.1f}% of NAV)"
+        )
+    if sim.reserve > 0 and cash_after < sim.reserve:
+        return reject(
+            f"would leave cash {cash_after:,.2f} below the {sim.reserve:,.2f} crash "
+            f"reserve; that cash is ring-fenced and the strategy cannot spend it"
         )
     if cash_after < 0:
         return reject("insufficient cash; borrowing is disabled")
